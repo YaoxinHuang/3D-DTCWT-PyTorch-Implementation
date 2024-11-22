@@ -35,7 +35,7 @@ def prep_filt(h, c, transpose=False):
     h = np.copy(h)
     return torch.tensor(h, dtype=torch.get_default_dtype())
 
-def first_filter_1d(X, h, axis, mode='symmetric'):
+def first_filter_1d(X, h, mode='symmetric', axis=-1):
     if X is None or X.shape == torch.Size([]):
         return torch.zeros(1,1,1, device=X.device)
     if len(X.shape) == 4:
@@ -68,7 +68,7 @@ def plus_filter_1d(X, ha, hb, highpass=False, mode='symmetric', axis=-1):
         shapes = list(X.shape)
         shapes[axis] = shapes[axis] // 2
         batch, ch, r, c = tuple(shapes)
-        if X.shape[-1] % 4 != 0 or X.shape[-2] % 4 != 0:
+        if X.shape[axis] % 4 != 0:
             raise ValueError('No. of rows in X must be a multiple of 4\n' +
                              'X was {}'.format(X.shape))
         if mode == 'symmetric':
@@ -109,92 +109,7 @@ def plus_filter_1d(X, ha, hb, highpass=False, mode='symmetric', axis=-1):
     
     return Y
 
-def colfilter(X, h, mode='symmetric'):
-    if X is None or X.shape == torch.Size([]):
-        return torch.zeros(1,1,1,1, device=X.device)
-    b, ch, row, col = X.shape
-    m = h.shape[2] // 2
-    if mode == 'symmetric':
-        xe = symm_pad(row, m)
-        X = F.conv2d(X[:,:,xe], h.repeat(ch,1,1,1), groups=ch)
-    else:
-        X = F.conv2d(X, h.repeat(ch, 1, 1, 1), groups=ch, padding=(m, 0))
-    return X
-
-
-def rowfilter(X, h, mode='symmetric'): # do not change the size of input through padding
-    if X is None or X.shape == torch.Size([]):
-        return torch.zeros(1,1,1,1, device=X.device)
-    b, ch, row, col = X.shape
-    m = h.shape[2] // 2 # h.shape = [1,1,13,1]
-    h = h.transpose(2,3).contiguous()
-    if mode == 'symmetric': # padding is symmetric or not
-        xe = symm_pad(col, m) # indexs of padding -> shape = [col + m -1, ]
-        X = F.conv2d(X[:,:,:,xe], h.repeat(ch,1,1,1), groups=ch) # F.conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1)
-    else:
-        X = F.conv2d(X, h.repeat(ch,1,1,1), groups=ch, padding=(0, m))
-    return X
-
-
-def coldfilt(X, ha, hb, highpass=False, mode='symmetric'):
-    if X is None or X.shape == torch.Size([]):
-        return torch.zeros(1,1,1,1, device=X.device)
-    batch, ch, r, c = X.shape
-    r2 = r // 2
-    if r % 4 != 0:
-        raise ValueError('No. of rows in X must be a multiple of 4\n' +
-                         'X was {}'.format(X.shape))
-
-    if mode == 'symmetric':
-        m = ha.shape[2]
-        xe = symm_pad(r, m)
-        X = torch.cat((X[:,:,xe[2::2]], X[:,:,xe[3::2]]), dim=1)
-        h = torch.cat((ha.repeat(ch, 1, 1, 1), hb.repeat(ch, 1, 1, 1)), dim=0)
-        X = F.conv2d(X, h, stride=(2,1), groups=ch*2)
-    else:
-        raise NotImplementedError()
-
-    # Reshape result to be shape [Batch, ch, r/2, c]. This reshaping
-    # interleaves the columns
-    if highpass:
-        X = torch.stack((X[:, ch:], X[:, :ch]), dim=-2).view(batch, ch, r2, c)
-    else:
-        X = torch.stack((X[:, :ch], X[:, ch:]), dim=-2).view(batch, ch, r2, c)
-
-    return X
-
-
-def rowdfilt(X, ha, hb, highpass=False, mode='symmetric'):  # wavelet.shape = [14,]
-    if X is None or X.shape == torch.Size([]):
-        return torch.zeros(1,1,1,1, device=X.device)
-    batch, ch, r, c = X.shape
-    c2 = c // 2
-    if c % 4 != 0: # why 4: used for those cubicals (Funciton p2c)
-        raise ValueError('No. of cols in X must be a multiple of 4\n' +
-                         'X was {}'.format(X.shape))
-
-    if mode == 'symmetric':
-        m = ha.shape[2]
-        xe = symm_pad(c, m) # why using shape[2] to pad and being used at shape[-1]?
-        # input_channel -> 2
-        X = torch.cat((X[:,:,:,xe[2::2]], X[:,:,:,xe[3::2]]), dim=1) # col can be diveded by 4, so we can use 2::2 and 3::2 to represent the same dimension
-        # weight_batch -> 2
-        h = torch.cat((ha.reshape(1,1,1,m).repeat(ch, 1, 1, 1),
-                       hb.reshape(1,1,1,m).repeat(ch, 1, 1, 1)), dim=0)
-        X = F.conv2d(X, h, stride=(1,2), groups=ch*2) # stride=(1,2) determines the 2-downsample of input
-    else:
-        raise NotImplementedError()
-
-    # Reshape result to be shape [Batch, ch, r/2, c]. This reshaping
-    # interleaves the columns
-    if highpass:
-        Y = torch.stack((X[:, ch:], X[:, :ch]), dim=-1).view(batch, ch, r, c2)
-    else:
-        Y = torch.stack((X[:, :ch], X[:, ch:]), dim=-1).view(batch, ch, r, c2)
-
-    return Y
-
-
+#TODO: Version 1.5
 def colifilt(X, ha, hb, highpass=False, mode='symmetric'):
     if X is None or X.shape == torch.Size([]):
         return torch.zeros(1,1,1,1, device=X.device)
@@ -238,7 +153,7 @@ def colifilt(X, ha, hb, highpass=False, mode='symmetric'):
 
     return X
 
-
+#TODO: Version 1.5
 def rowifilt(X, ha, hb, highpass=False, mode='symmetric'):
     if X is None or X.shape == torch.Size([]):
         return torch.zeros(1,1,1,1, device=X.device)
@@ -353,6 +268,7 @@ def q2c_3d(y, dim=-1):
     # Return as pairs of real and imaginary components
     return ((z1_real, z1_imag), (z2_real, z2_imag), (z3_real, z3_imag), (z4_real, z4_imag))
 
+
 def c2q(w1, w2):
     """
     Scale by gain and convert from complex w(:,:,1:2) to real quad-numbers
@@ -386,3 +302,8 @@ def c2q(w1, w2):
     y /= np.sqrt(2)
 
     return y
+
+
+#TODO: Version 1.5
+def c2q_3d(w1, w2):
+    pass

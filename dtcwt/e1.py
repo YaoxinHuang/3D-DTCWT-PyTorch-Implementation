@@ -1,4 +1,3 @@
-# %%
 # Example 1: 2D Image for DTCWT
 import torch
 import numpy as np
@@ -10,7 +9,7 @@ from matplotlib import pyplot as plt
 from dtcwt import DTCWTForward
 from dtcwt.misc import normalize_01
 
-img = Image.open(r'../assets/musk.png').convert('RGB') # [W, H]
+img = Image.open(r'./assets/musk.png').convert('RGB') # [W, H]
 img_l = img.convert('L')
 img_t = torch.tensor(pil_to_tensor(img)).unsqueeze(0).to(torch.float32) / 255. # [N, C, H, W]
 
@@ -39,14 +38,3 @@ for i in range(high.shape[2]):
     plt.imshow(normalize_01(img, torch.max(img), torch.min(img)).permute(1, 2, 0).numpy(), cmap='gray')
 plt.show()  # Display the new figure
 print(low.shape, high.shape)
-
-# %%
-# Example 2: 3D Example for DTCWT
-import torch
-from dtcwt import DTCWTForward
-from dtcwt.misc import normalize_01
-
-input = torch.randn(1, 1, 500, 279, 100) # [N, C, D, H, W]
-dtcwt = DTCWTForward(input_dim=3, J=3, skip_hps=False)
-low, high = dtcwt(input)
-print(low.shape, high[-1].shape)

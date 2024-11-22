@@ -1,10 +1,10 @@
 import torch
 from torch import tensor
 from torch.autograd import Function
-from pytorch_wavelets.dtcwt.lowlevel import colfilter, rowfilter
-from pytorch_wavelets.dtcwt.lowlevel import coldfilt, rowdfilt, first_filter_1d, plus_filter_1d
-from pytorch_wavelets.dtcwt.lowlevel import colifilt, rowifilt, q2c, c2q, q2c_3d
 from pytorch_wavelets.dwt.lowlevel import int_to_mode
+from dtcwt._base_func import first_filter_1d, plus_filter_1d
+from dtcwt._base_func import colifilt, rowifilt, q2c, c2q, q2c_3d
+
 
 def get_dimensions5(o_dim, ri_dim):
     """ Get the orientation, height and width dimensions after the real and
@@ -59,9 +59,9 @@ def get_dimensions6(o_dim, ri_dim):
 
 
 def highs_to_orientations(lh, hl, hh, o_dim):
-    (deg15r, deg15i,deg165r, deg165i) = q2c(lh)
-    (deg45r, deg45i,deg135r, deg135i) = q2c(hh)
-    (deg75r, deg75i,deg105r, deg105i) = q2c(hl)
+    (deg15r, deg15i), (deg165r, deg165i) = q2c(lh)
+    (deg45r, deg45i), (deg135r, deg135i) = q2c(hh)
+    (deg75r, deg75i), (deg105r, deg105i) = q2c(hl)
 
     # Convert real and imaginary to magnitude
     reals = torch.stack(
@@ -138,6 +138,31 @@ def orientations_to_highs(reals, imags, o_dim):
     return lh, hl, hh
 
 
+def fwd_j1(x, h0, h1, skip_hps, o_dim, mode):
+    """ Level 1 forward dtcwt.
+
+    Have it as a separate function as can be used by
+    the forward pass of the forward transform and the backward pass of the
+    inverse transform.
+    """
+    # Level 1 forward (biorthogonal analysis filters)
+    if not skip_hps:
+        lo = first_filter_1d(x, h0, mode, -1)
+        hi = first_filter_1d(x, h1, mode, -1)
+        ll = first_filter_1d(lo, h0, mode, -2)
+        lh = first_filter_1d(lo, h1, mode, -2)
+        hl = first_filter_1d(hi, h0, mode, -2)
+        hh = first_filter_1d(hi, h1, mode, -2)
+        del lo, hi
+        highr, highi = highs_to_orientations(lh, hl, hh, o_dim)
+    else:
+        ll = first_filter_1d(x, h0, mode, -1)
+        ll = first_filter_1d(ll, h0, mode, -2)
+        highr = x.new_zeros([])
+        highi = x.new_zeros([])
+    return ll, highr, highi
+
+
 def fwd_j1_3d(x, h0, h1, skip_hps, o_dim, mode):
     """ Level 1 forward dtcwt.
 
@@ -147,31 +172,66 @@ def fwd_j1_3d(x, h0, h1, skip_hps, o_dim, mode):
     """
     # Level 1 forward (biorthogonal analysis filters)
     if not skip_hps:
-        lo = first_filter_1d(x, h0, -1, mode)
-        hi = first_filter_1d(x, h1, -1, mode)
-        ll = first_filter_1d(lo, h0, -2, mode)
-        lh = first_filter_1d(lo, h1, -2, mode)
-        hl = first_filter_1d(hi, h0, -2, mode)
-        hh = first_filter_1d(hi, h1, -2, mode)
-        lll = first_filter_1d(ll, h0, -3, mode)
-        llh = first_filter_1d(ll, h1, -3, mode)
-        lhl = first_filter_1d(lh, h0, -3, mode)
-        lhh = first_filter_1d(lh, h1, -3, mode)
-        hll = first_filter_1d(hl, h0, -3, mode)
-        hlh = first_filter_1d(hl, h1, -3, mode)
-        hhl = first_filter_1d(hh, h0, -3, mode)
-        hhh = first_filter_1d(hh, h1, -3, mode)
+        lo = first_filter_1d(x, h0, mode, -1)
+        hi = first_filter_1d(x, h1, mode, -1)
+        ll = first_filter_1d(lo, h0, mode, -2)
+        lh = first_filter_1d(lo, h1, mode, -2)
+        hl = first_filter_1d(hi, h0, mode, -2)
+        hh = first_filter_1d(hi, h1, mode, -2)
+        lll = first_filter_1d(ll, h0, mode, -3)
+        llh = first_filter_1d(ll, h1, mode, -3)
+        lhl = first_filter_1d(lh, h0, mode, -3)
+        lhh = first_filter_1d(lh, h1, mode, -3)
+        hll = first_filter_1d(hl, h0, mode, -3)
+        hlh = first_filter_1d(hl, h1, mode, -3)
+        hhl = first_filter_1d(hh, h0, mode, -3)
+        hhh = first_filter_1d(hh, h1, mode, -3)
         del lo, hi, ll, lh, hl, hh
         highr, highi = highs_to_orientations_3d(llh, lhl, lhh, hll, hlh, hhl, hhh, o_dim)
     else:
-        lll = first_filter_1d(x, h0, -1, mode)
-        lll = first_filter_1d(lll, h0, -2, mode)
-        lll = first_filter_1d(lll, h0, -3, mode)
+        lll = first_filter_1d(x, h0, mode, -1)
+        lll = first_filter_1d(lll, h0, mode, -2)
+        lll = first_filter_1d(lll, h0, mode, -3)
         highr = x.new_zeros([])
         highi = x.new_zeros([])
     return lll, highr, highi
 
+# TODO: Version 1.5
+def inv_j1(ll, highr, highi, g0, g1, o_dim, h_dim, w_dim, mode):
+    """ Level1 inverse dtcwt.
 
+    Have it as a separate function as can be used by the forward pass of the
+    inverse transform and the backward pass of the forward transform.
+    """
+    if highr is None or highr.shape == torch.Size([]):
+        y = rowfilter(colfilter(ll, g0), g0)
+    else:
+        # Get the double sampled bandpass coefficients
+        lh, hl, hh = orientations_to_highs(highr, highi, o_dim)
+
+        if ll is None or ll.shape == torch.Size([]):
+            # Interpolate
+            hi = colfilter(hh, g1, mode) + colfilter(hl, g0, mode)
+            lo = colfilter(lh, g1, mode)
+            del lh, hh, hl
+        else:
+            # Possibly cut back some rows to make the ll match the highs
+            r, c = ll.shape[2:]
+            r1, c1 = highr.shape[h_dim], highr.shape[w_dim]
+            if r != r1 * 2:
+                ll = ll[:,:,1:-1]
+            if c != c1 * 2:
+                ll = ll[:,:,:,1:-1]
+            # Interpolate
+            hi = colfilter(hh, g1, mode) + colfilter(hl, g0, mode)
+            lo = colfilter(lh, g1, mode) + colfilter(ll, g0, mode)
+            del lh, hl, hh
+
+        y = rowfilter(hi, g1, mode) + rowfilter(lo, g0, mode)
+
+    return y
+
+# TODO: Version 1.5
 def inv_j1_3d(ll, highr, highi, g0, g1, o_dim, h_dim, w_dim, mode):
     """ Level1 inverse dtcwt.
 
@@ -205,6 +265,32 @@ def inv_j1_3d(ll, highr, highi, g0, g1, o_dim, h_dim, w_dim, mode):
         y = rowfilter(hi, g1, mode) + rowfilter(lo, g0, mode)
 
     return y
+
+
+def fwd_j2plus(x, h0a, h1a, h0b, h1b, skip_hps, o_dim, mode):
+    """ Level 2 plus forward dtcwt.
+
+    Have it as a separate function as can be used by
+    the forward pass of the forward transform and the backward pass of the
+    inverse transform.
+    """
+    if not skip_hps:
+        lo = plus_filter_1d(x, h0b, h0a, False, mode, -1)
+        hi = plus_filter_1d(x, h1b, h1a, True, mode, -1)
+
+        ll = plus_filter_1d(lo, h0b, h0a, False, mode, -2)
+        lh = plus_filter_1d(lo, h1b, h1a, True, mode, -2)
+        hl = plus_filter_1d(hi, h0b, h0a, False, mode, -2)
+        hh = plus_filter_1d(hi, h1b, h1a, True, mode, -2)
+        del lo, hi
+        highr, highi = highs_to_orientations(lh, hl, hh, o_dim)
+    else:
+        ll = plus_filter_1d(x, h0b, h0a, False, mode, -1)
+        ll = plus_filter_1d(ll, h0b, h0a, False, mode, -2)
+        highr = None
+        highi = None
+
+    return ll, highr, highi
 
 
 def fwd_j2plus_3d(x, h0a, h1a, h0b, h1b, skip_hps, o_dim, mode):
@@ -242,6 +328,11 @@ def fwd_j2plus_3d(x, h0a, h1a, h0b, h1b, skip_hps, o_dim, mode):
     return lll, highr, highi
 
 
+#TODO: Version 1.5
+def inv_j2plus():
+    pass
+
+#TODO: Version 1.5
 def inv_j2plus_3d(ll, highr, highi, g0a, g1a, g0b, g1b, o_dim, h_dim, w_dim, mode):
     """ Level2+ inverse dtcwt.
 
@@ -272,6 +363,39 @@ def inv_j2plus_3d(ll, highr, highi, g0a, g1a, g0b, g1b, o_dim, h_dim, w_dim, mod
             rowifilt(lo, g0b, g0a, False, mode)
     return y
 
+
+class FWD_J1(Function):
+    """ Differentiable function doing 1 level forward DTCWT """
+    @staticmethod
+    def forward(ctx, x, h0, h1, skip_hps, o_dim, ri_dim, mode):
+        mode = int_to_mode(mode)
+        ctx.mode = mode
+        ctx.save_for_backward(h0, h1)
+        ctx.dims = get_dimensions5(o_dim, ri_dim)
+        o_dim, ri_dim = ctx.dims[0], ctx.dims[1]
+
+        ll, highr, highi = fwd_j1(x, h0, h1, skip_hps, o_dim, mode)
+        if not skip_hps:
+            highs = torch.stack((highr, highi), dim=ri_dim)
+        else:
+            highs = ll.new_zeros([])
+        return ll, highs
+
+    @staticmethod
+    def backward(ctx, dl, dh):
+        h0, h1 = ctx.saved_tensors
+        mode = ctx.mode
+        dx = None
+        if ctx.needs_input_grad[0]:
+            o_dim, ri_dim, h_dim, w_dim = ctx.dims
+            if dh is not None and dh.shape != torch.Size([]):
+                dhr, dhi = torch.unbind(dh, dim=ri_dim)
+            else:
+                dhr = dl.new_zeros([])
+                dhi = dl.new_zeros([])
+            dx = inv_j1(dl, dhr, dhi, h0, h1, o_dim, h_dim, w_dim, mode)
+
+        return dx, None, None, None, None, None, None
 
 
 class FWD_J1_3D(Function):
@@ -307,6 +431,45 @@ class FWD_J1_3D(Function):
             dx = inv_j1(dl, dhr, dhi, h0, h1, o_dim, h_dim, w_dim, mode)
 
         return dx, None, None, None, None, None, None
+
+
+class FWD_J2PLUS(Function):
+    """ Differentiable function doing second level forward DTCWT """
+    @staticmethod
+    def forward(ctx, x, h0a, h1a, h0b, h1b, skip_hps, o_dim, ri_dim, mode):
+        mode = 'symmetric'
+        ctx.mode = mode
+        ctx.save_for_backward(h0a, h1a, h0b, h1b)
+        ctx.dims = get_dimensions5(o_dim, ri_dim)
+        o_dim, ri_dim = ctx.dims[0], ctx.dims[1]
+
+        ll, highr, highi = fwd_j2plus(x, h0a, h1a, h0b, h1b, skip_hps, o_dim, mode)
+        if not skip_hps:
+            highs = torch.stack((highr, highi), dim=ri_dim)
+        else:
+            highs = ll.new_zeros([])
+        return ll, highs
+
+    @staticmethod
+    def backward(ctx, dl, dh):
+        h0a, h1a, h0b, h1b = ctx.saved_tensors
+        mode = ctx.mode
+        # The colifilt and rowifilt functions use conv2d not conv2d_transpose,
+        # so need to reverse the filters
+        h0a, h0b = h0b, h0a
+        h1a, h1b = h1b, h1a
+        dx = None
+        if ctx.needs_input_grad[0]:
+            o_dim, ri_dim, h_dim, w_dim = ctx.dims
+            if dh is not None and dh.shape != torch.Size([]):
+                dhr, dhi = torch.unbind(dh, dim=ri_dim)
+            else:
+                dhr = dl.new_zeros([])
+                dhi = dl.new_zeros([])
+            dx = inv_j2plus(dl, dhr, dhi, h0a, h1a, h0b, h1b,
+                            o_dim, h_dim, w_dim, mode)
+
+        return dx, None, None, None, None, None, None, None, None
 
 
 class FWD_J2PLUS_3D(Function):
@@ -347,7 +510,7 @@ class FWD_J2PLUS_3D(Function):
 
         return dx, None, None, None, None, None, None, None, None
 
-
+#TODO: Version 1.5
 class INV_J1(Function):
     """ Differentiable function doing 1 level inverse DTCWT """
     @staticmethod
@@ -383,7 +546,7 @@ class INV_J1(Function):
 
         return dl, dh, None, None, None, None, None
 
-
+#TODO: Version 1.5
 class INV_J2PLUS(Function):
     """ Differentiable function doing level 2 onwards inverse DTCWT """
     @staticmethod

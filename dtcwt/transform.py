@@ -4,14 +4,11 @@ import torch
 import torch.nn as nn
 from numpy import ndarray, sqrt
 
-from pytorch_wavelets.dtcwt.coeffs import qshift as _qshift, biort as _biort, level1
+from pytorch_wavelets.dtcwt.coeffs import qshift as _qshift, biort as _biort
 from pytorch_wavelets.dtcwt.lowlevel import prep_filt
-from pytorch_wavelets.dtcwt.transform_funcs import FWD_J1, FWD_J2PLUS
-from pytorch_wavelets.dtcwt.transform_funcs import INV_J1, INV_J2PLUS
 from pytorch_wavelets.dtcwt.transform_funcs import get_dimensions6
 from pytorch_wavelets.dwt.lowlevel import mode_to_int
-from pytorch_wavelets.dwt.transform2d import DWTForward, DWTInverse
-from pytorch_wavelets.dtcwt.transform_funcs_3d import FWD_J1_3D, FWD_J2PLUS_3D
+from dtcwt.transform_funcs_3d import FWD_J1_3D, FWD_J2PLUS_3D, FWD_J1, FWD_J2PLUS, INV_J1, INV_J2PLUS
 
 from misc import timeit
 from ._base_func import *
@@ -43,7 +40,7 @@ class DTCWTForward(nn.Module):
     """
     def __init__(self, input_dim=2, biort='near_sym_a', qshift='qshift_a',
                  J=3, skip_hps=False, include_scale=False,
-                 o_dim=2, ri_dim=-1, mode='symmetric'):
+                 o_dim=2, ri_dim=-1, mode='symmetric', device='cpu'):
         super().__init__()
         # For 2D: [N, C, H, W] -> highfreq:[N, C, 6, H', W', 2]; lowfreq:[N, C, H', W']
         # For 3D: [N, C, D, H, W] -> highfreq:[N, C, 28, D', H', W', 2]; lowfreq:[N, C, D', H', W']
@@ -58,6 +55,7 @@ class DTCWTForward(nn.Module):
         self.ri_dim = ri_dim
         self.mode = mode
         self.dim = input_dim
+        self.devicve = torch.device(device)
         if isinstance(biort, str):
             h0o, _, h1o, _ = _biort(biort)
             self.register_buffer('h0o', prep_filt(h0o, 1))
@@ -121,9 +119,9 @@ class DTCWTForward(nn.Module):
             # extend X
             r, c = x.shape[2:]
             if r % 2 != 0:
-                x = torch.cat((x, x[:,:,-1:]), dim=2)
+                x = torch.cat((x, x[..., -1:]), dim=-1)
             if c % 2 != 0:
-                x = torch.cat((x, x[:,:,:,-1:]), dim=3)
+                x = torch.cat((x, x[..., -1:, :]), dim=-2)
 
             # Do the level 1 transform, get the (equal-size)low and (2-downsample)highpass outputs
             # h0o is lowpass-filter, h1o is highpass-filter
@@ -136,10 +134,10 @@ class DTCWTForward(nn.Module):
             for j in range(1, self.J):
                 # Ensure the lowpass is divisible by 4, but why 4?
                 r, c = low.shape[2:]
-                if r % 4 != 0:
-                    low = torch.cat((low[:,:,0:1], low, low[:,:,-1:]), dim=2)
                 if c % 4 != 0:
-                    low = torch.cat((low[:,:,:,0:1], low, low[:,:,:,-1:]), dim=3)
+                    low = torch.cat((low[..., 0:1], low, low[..., -1:]), dim=-1)
+                if r % 4 != 0:
+                    low = torch.cat((low[..., 0:1, :], low, low[..., -1:, :]), dim=-2)
 
                 # Do the level 2+ transform
                 low, h = FWD_J2PLUS.apply(low, self.h0a, self.h1a, self.h0b,
@@ -312,8 +310,6 @@ class DTCWTInverse(nn.Module):
         low = INV_J1.apply(low, highs[0], self.g0o, self.g1o, self.o_dim,
                            self.ri_dim, mode)
         return low
-
-
 
 
 if __name__ == '__main__':
